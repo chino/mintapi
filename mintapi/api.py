@@ -38,7 +38,7 @@ except ImportError:
     pd = None
 
 logger = logging.getLogger('mintapi')
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def assert_pd():
@@ -306,6 +306,10 @@ def get_web_driver(email, password, headless=False, mfa_method=None, mfa_token=N
     driver.find_element_by_id("ius-password").send_keys(password)
     driver.find_element_by_id("ius-sign-in-submit-btn").submit()
 
+    # How long to wait before retry
+    backoff_timer = int(os.environ.get("BACKOFF") or 10)
+    backoff_max = 60*60*24
+
     # Wait until logged in, just in case we need to deal with MFA.
     while not driver.current_url.startswith(
             'https://mint.intuit.com/overview.event'):
@@ -324,6 +328,21 @@ def get_web_driver(email, password, headless=False, mfa_method=None, mfa_token=N
         driver.implicitly_wait(1)  # seconds
         try:
             if mfa_method == 'soft-token':
+
+                mfa_token_message = driver.find_element_by_id('ius-mfa-soft-token-messages')
+                if mfa_token_message:
+                    message = mfa_token_message.text.strip()
+                    #failed = 'expired or is incorrect'
+                    #pattern = 'exceeded the number of attempts allowed'
+                    #if re.match(pattern, message):
+                    if message:
+                        logger.debug("MFA Soft-Token Error Message:", message)
+                        backoff_timer = min(backoff_timer * 2, backoff_max)
+                        logger.debug("Backing off for %d seconds" % backoff_timer)
+                        sys.stderr.write("BACKOFF=%d %s\n" % (backoff_timer,message))
+                        sys.stderr.flush()
+                        time.sleep(backoff_timer)
+
                 import oathtool
                 mfa_token_input = driver.find_element_by_id('ius-mfa-soft-token')
                 mfa_code = oathtool.generate_otp(mfa_token)
